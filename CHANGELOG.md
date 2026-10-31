@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning][].
 [keep a changelog]: https://keepachangelog.com/
 [semantic versioning]: https://semver.org/
 
+## [Unreleased]
+
+### Added
+
+- `pl.embedding` has a new experimental `backend` argument. With `backend="holoviews"` it returns an interactive
+  HoloViews/Bokeh plot (a `holoviews.Layout` if several `color` keys are given). Requires the new optional
+  `holoviews` extra (`holoviews`, `hv-anndata`, `bokeh`). `"matplotlib"` remains the default.
+
 ## [0.2.1]
 
 ### Fixed

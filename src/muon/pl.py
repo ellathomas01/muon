@@ -1,6 +1,7 @@
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -10,7 +11,11 @@ from anndata import AnnData
 from matplotlib.axes import Axes
 from mudata import MuData
 
+from ._hv import hv_embedding
 from .utils import _get_values
+
+if TYPE_CHECKING:
+    import holoviews as hv
 
 #
 # Scatter
@@ -110,8 +115,9 @@ def embedding(
     use_raw: bool | Mapping[str, bool] = False,
     layer: str | Mapping[str, str | None] | None = None,
     gene_symbols: str | Mapping[str, str | None] | None = None,
+    backend: Literal["matplotlib", "holoviews"] = "matplotlib",
     **kwargs,
-) -> Axes | list[Axes] | None:
+) -> "Axes | list[Axes] | hv.Scatter | hv.Layout | None":
     """Scatter plot for .obs.
 
     Produce a scatter plot in the define basis, which can also be a basis inside any modality, e.g. ``"rna:X_pca"``.
@@ -132,13 +138,27 @@ def embedding(
             entry for each modality.
         gene_symbols: Column of `.var` to search for `color` in. If a mapping is given, it must have one entry
             for each modality.
-        **kwargs: Additional keyword arguments passed to :func:`scanpy.pl.embedding`.
+        backend: Plotting backend. ``"matplotlib"`` (default) calls :func:`scanpy.pl.embedding`.
+            ``"holoviews"`` (experimental) returns an interactive HoloViews/Bokeh plot (a
+            :class:`holoviews.Layout` if several `color` keys are given) and requires ``holoviews``,
+            ``hv-anndata`` and ``bokeh``. For a plain ``AnnData`` it can only colour by ``.obs`` columns.
+        **kwargs: Additional keyword arguments passed to :func:`scanpy.pl.embedding`
+            (or to ``.opts()`` of the HoloViews element if ``backend="holoviews"``).
     """
+    if backend not in ("matplotlib", "holoviews"):
+        raise ValueError(f"Unknown plotting backend {backend!r}. Choose 'matplotlib' or 'holoviews'.")
+
     if isinstance(data, AnnData):
         localvars = locals()
         for arg in ("use_raw", "layer", "gene_symbols"):
             if isinstance(localvars[arg], Mapping):
                 raise ValueError(f"`{arg}` can only be a dictionary if `data` is a `MuData` object.")
+        if backend == "holoviews":
+            if use_raw or layer is not None or gene_symbols is not None:
+                raise NotImplementedError(
+                    "`use_raw`, `layer` and `gene_symbols` are not supported by the holoviews backend for AnnData."
+                )
+            return hv_embedding(data, basis, color, **kwargs)
         return sc.pl.embedding(
             data, basis=basis, color=color, use_raw=use_raw, layer=layer, gene_symbols=gene_symbols, **kwargs
         )
@@ -187,6 +207,8 @@ def embedding(
 
     if color is None:
         ad = AnnData(obs=obs, obsm=adata.obsm, obsp=adata.obsp)
+        if backend == "holoviews":
+            return hv_embedding(ad, basis_mod, None, **kwargs)
         return sc.pl.embedding(ad, basis=basis_mod, **kwargs)
 
     # Some `color` has been provided
@@ -234,6 +256,8 @@ def embedding(
         color = [mod_key_modifier[k] for k in keys]
 
     ad = AnnData(obs=obs, obsm=adata.obsm, obsp=adata.obsp, uns=adata.uns)
+    if backend == "holoviews":
+        return hv_embedding(ad, basis_mod, color, **kwargs)
     retval = sc.pl.embedding(ad, basis=basis_mod, color=color, **kwargs)
     for key, col in zip(keys, color, strict=True):
         with suppress(KeyError):
