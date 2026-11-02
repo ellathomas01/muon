@@ -50,8 +50,27 @@ def _import_holoviews() -> tuple[Any, Any]:
     return hv, A
 
 
-def _scatter(hv: Any, A: Any, ad: AnnData, basis: str, color: str | None, user_opts: dict[str, Any]) -> hv.Scatter:
-    x, y = A.obsm[basis][0], A.obsm[basis][1]
+def _as_list(color: str | Sequence[str] | None) -> list[str | None]:
+    """Turn the ``color`` argument into a list with one entry per plot (``[None]`` for no colour)."""
+    if color is None:
+        return [None]
+    if isinstance(color, str):
+        return [color]
+    return list(color)
+
+
+def _check_in_obs(ad: AnnData, keys: Sequence[str | None], verb: str) -> None:
+    """Raise if any of ``keys`` is not a column of ``ad.obs``."""
+    missing = [k for k in keys if k is not None and k not in ad.obs.columns]
+    if missing:
+        raise NotImplementedError(
+            f"{missing} not found in .obs. The holoviews backend can only {verb} .obs columns "
+            "for a plain AnnData; for a MuData, features from any modality are supported."
+        )
+
+
+def _scatter(hv: Any, A: Any, ad: AnnData, x: Any, y: Any, color: str | None, user_opts: dict[str, Any]) -> hv.Scatter:
+    """One scatter plot of the ``x`` and ``y`` accessors, coloured by an obs column or not coloured."""
     if color is None:
         plot = hv.Scatter(ad, x, [y])
         opts: dict[str, Any] = {"aspect": "square", "tools": ["hover"]}
@@ -67,6 +86,13 @@ def _scatter(hv: Any, A: Any, ad: AnnData, basis: str, color: str | None, user_o
             opts["legend_position"] = "right"
     opts.update(user_opts)
     return plot.opts(backend="bokeh", **opts)
+
+
+def _combine(hv: Any, plots: list[hv.Scatter]) -> hv.Scatter | hv.Layout:
+    """Return a single plot as is, and several plots as a layout with at most three columns."""
+    if len(plots) == 1:
+        return plots[0]
+    return hv.Layout(plots).cols(min(len(plots), 3))
 
 
 def hv_embedding(
@@ -94,22 +120,32 @@ def hv_embedding(
     if np.shape(ad.obsm[basis])[1] < 2:
         raise ValueError(f"Basis {basis!r} needs at least two dimensions to be plotted.")
 
-    colors: list[str | None]
-    if color is None:
-        colors = [None]
-    elif isinstance(color, str):
-        colors = [color]
-    else:
-        colors = list(color)
+    colors = _as_list(color)
+    _check_in_obs(ad, colors, "colour by")
 
-    missing = [c for c in colors if c is not None and c not in ad.obs.columns]
-    if missing:
-        raise NotImplementedError(
-            f"{missing} not found in .obs. The holoviews backend can only colour by .obs columns "
-            "for a plain AnnData; for a MuData, features from any modality are supported."
-        )
+    x, y = A.obsm[basis][0], A.obsm[basis][1]
+    return _combine(hv, [_scatter(hv, A, ad, x, y, c, kwargs) for c in colors])
 
-    plots = [_scatter(hv, A, ad, basis, c, kwargs) for c in colors]
-    if len(plots) == 1:
-        return plots[0]
-    return hv.Layout(plots).cols(min(len(plots), 3))
+
+def hv_scatter(
+    ad: AnnData, x: str, y: str, color: str | Sequence[str] | None = None, **kwargs: Any
+) -> hv.Scatter | hv.Layout:
+    """Interactive scatter plot of two ``.obs`` columns of ``ad``.
+
+    Args:
+        ad: AnnData object holding ``x``, ``y`` and everything that is used for colouring in ``.obs``.
+        x: Column of ``ad.obs`` for the x axis.
+        y: Column of ``ad.obs`` for the y axis.
+        color: Column(s) of ``ad.obs``. One plot is made per column.
+        **kwargs: Forwarded to ``.opts()`` of each HoloViews element, overriding the defaults.
+            These are *bokeh* options, not scanpy/matplotlib ones.
+
+    Returns:
+        A single :class:`holoviews.Scatter` or, for several colours, a :class:`holoviews.Layout`.
+    """
+    hv, A = _import_holoviews()
+
+    colors = _as_list(color)
+    _check_in_obs(ad, [x, y, *colors], "plot")
+
+    return _combine(hv, [_scatter(hv, A, ad, A.obs[x], A.obs[y], c, kwargs) for c in colors])

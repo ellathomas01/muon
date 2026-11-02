@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning][].
 
 ### Added
 
-- `pl.embedding` has a new experimental `backend` argument. With `backend="holoviews"` it returns an interactive
-  HoloViews/Bokeh plot (a `holoviews.Layout` if several `color` keys are given). Requires the new optional
-  `holoviews` extra (`holoviews`, `hv-anndata`, `bokeh`). `"matplotlib"` remains the default.
+- `pl.embedding` and `pl.scatter` have a new experimental `backend` argument. With `backend="holoviews"` they return
+  an interactive HoloViews/Bokeh plot (a `holoviews.Layout` if several `color` keys are given). Requires the new
+  optional `holoviews` extra (`holoviews`, `hv-anndata`, `bokeh`). `"matplotlib"` remains the default.
 
 ## [0.2.1]
 

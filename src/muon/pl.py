@@ -11,7 +11,7 @@ from anndata import AnnData
 from matplotlib.axes import Axes
 from mudata import MuData
 
-from ._hv import hv_embedding
+from ._hv import hv_embedding, hv_scatter
 from .utils import _get_values
 
 if TYPE_CHECKING:
@@ -34,8 +34,9 @@ def scatter(
     | tuple[Mapping[str, str], Mapping[str, str], Mapping[str, str]]
     | None = None,
     gene_symbols: str | Mapping[str, str | None] | None = None,
+    backend: Literal["matplotlib", "holoviews"] = "matplotlib",
     **kwargs,
-) -> Axes | list[Axes] | None:
+) -> "Axes | list[Axes] | hv.Scatter | hv.Layout | None":
     """Scatter plot along observations or variables axes.
 
     Variables in each modality can be referenced, e.g. ``"rna:X_pca"``.
@@ -55,13 +56,27 @@ def scatter(
             have one entry for each modality.
         gene_symbols: Column of `.var` to search for `color` in. If a mapping is given, it must have one
             entry for each modality.
-        **kwargs: Additional keyword arguments passed to :func:`scanpy.pl.scatter`.
+        backend: Plotting backend. ``"matplotlib"`` (default) calls :func:`scanpy.pl.scatter`.
+            ``"holoviews"`` (experimental) returns an interactive HoloViews/Bokeh plot (a
+            :class:`holoviews.Layout` if several `color` keys are given) and requires ``holoviews``,
+            ``hv-anndata`` and ``bokeh``. For a plain ``AnnData`` it can only plot ``.obs`` columns.
+        **kwargs: Additional keyword arguments passed to :func:`scanpy.pl.scatter`
+            (or to ``.opts()`` of the HoloViews element if ``backend="holoviews"``).
     """
+    if backend not in ("matplotlib", "holoviews"):
+        raise ValueError(f"Unknown plotting backend {backend!r}. Choose 'matplotlib' or 'holoviews'.")
+
     if isinstance(data, AnnData):
         localvars = locals()
         for arg in ("use_raw", "layers", "gene_symbols"):
             if isinstance(localvars[arg], Mapping):
                 raise ValueError(f"`{arg}` can only be a dictionary if `data` is a `MuData` object.")
+        if backend == "holoviews":
+            if use_raw or layers is not None or gene_symbols is not None:
+                raise NotImplementedError(
+                    "`use_raw`, `layers` and `gene_symbols` are not supported by the holoviews backend for AnnData."
+                )
+            return hv_scatter(data, x, y, color, **kwargs)
         return sc.pl.scatter(data, x=x, y=y, color=color, use_raw=use_raw, layers=layers, **kwargs)
 
     if isinstance(layers, str | Mapping) or layers is None:
@@ -90,6 +105,8 @@ def scatter(
         obs = pd.concat([obs, color_obs], axis=1, ignore_index=False)
 
     ad = AnnData(obs=obs, uns=data.uns)
+    if backend == "holoviews":
+        return hv_scatter(ad, x, y, color, **kwargs)
 
     # Note that use_raw and layers are not provided to the plotting function
     # as the corresponding values were fetched from individual modalities
