@@ -13,11 +13,20 @@ from anndata import AnnData
 from matplotlib.axes import Axes
 from mudata import MuData
 
-from ._hv import _scanpy_preset_is_v2, reject_v2_options, v2_embedding, v2_scatter
+from ._hv import (
+    _scanpy_preset_is_v2,
+    check_accessors,
+    reject_v2_options,
+    reject_with_accessors,
+    require_only_accessors,
+    v2_embedding,
+    v2_scatter,
+)
 from .utils import _get_values
 
 if TYPE_CHECKING:
     import holoviews as hv
+    from anndata.acc import AdRef
 
 #
 # Scatter
@@ -26,9 +35,9 @@ if TYPE_CHECKING:
 
 def scatter(
     data: AnnData | MuData,
-    x: str | None = None,
-    y: str | None = None,
-    color: str | Sequence[str] | None = None,
+    x: str | AdRef | None = None,
+    y: str | AdRef | None = None,
+    color: str | Sequence[str] | AdRef | Sequence[AdRef] | None = None,
     use_raw: bool | Mapping[str, bool] = False,
     layers: str
     | tuple[str, str, str]
@@ -41,6 +50,11 @@ def scatter(
     """Scatter plot along observations or variables axes.
 
     Variables in each modality can be referenced, e.g. ``"rna:X_pca"``.
+
+    With scanpy's ``ScanpyV2Preview`` preset, ``x``, ``y`` and ``color`` can also be accessor references
+    (e.g. ``A.X[:, "gene"]``, ``A.layers["counts"][:, "gene"]`` or ``A.obs["column"]``, with ``A`` from
+    ``scanpy.pl.hv_init``). They say where the data comes from, so ``layers`` and ``gene_symbols`` cannot be set
+    with them. For a MuData object, all of ``x``, ``y`` and ``color`` (if given) must then be references.
 
     See :func:`scanpy.pl.scatter` for details.
 
@@ -59,6 +73,7 @@ def scatter(
             entry for each modality.
         **kwargs: Additional keyword arguments passed to :func:`scanpy.pl.scatter`.
     """
+    accessors = check_accessors(x, y, color)
     if isinstance(data, AnnData):
         localvars = locals()
         for arg in ("use_raw", "layers", "gene_symbols"):
@@ -76,6 +91,12 @@ def scatter(
                 **kwargs,
             )
         return sc.pl.scatter(data, x=x, y=y, color=color, use_raw=use_raw, layers=layers, **kwargs)
+
+    if accessors:
+        # accessor references read from the MuData itself, so no values have to be fetched from the modalities
+        require_only_accessors(x=x, y=y, color=color)
+        reject_with_accessors(use_raw=use_raw, layers=layers, gene_symbols=gene_symbols)
+        return v2_scatter(data, x, y, color, **kwargs)  # type: ignore[arg-type]
 
     if isinstance(layers, str | Mapping) or layers is None:
         clayers = (layers, layers, layers)
@@ -125,8 +146,8 @@ def scatter(
 
 def embedding(
     data: AnnData | MuData,
-    basis: str,
-    color: str | Sequence[str] | None = None,
+    basis: str | AdRef,
+    color: str | Sequence[str] | AdRef | Sequence[AdRef] | None = None,
     use_raw: bool | Mapping[str, bool] = False,
     layer: str | Mapping[str, str | None] | None = None,
     gene_symbols: str | Mapping[str, str | None] | None = None,
@@ -135,6 +156,12 @@ def embedding(
     """Scatter plot for .obs.
 
     Produce a scatter plot in the define basis, which can also be a basis inside any modality, e.g. ``"rna:X_pca"``.
+
+    With scanpy's ``ScanpyV2Preview`` preset, ``basis`` and ``color`` can also be accessor references
+    (e.g. ``A.obsm["X_umap"][:, [0, 1]]`` and ``A.obs["column"]``, with ``A`` from ``scanpy.pl.hv_init``). They say
+    where the data comes from, so ``layer`` and ``gene_symbols`` cannot be set with them. For a MuData object with
+    references, a ``basis`` given as a name is looked up in the joint embeddings only (``.obsm``), not in the
+    modalities.
 
     See :func:`scanpy.pl.embedding` for details.
 
@@ -154,6 +181,7 @@ def embedding(
             for each modality.
         **kwargs: Additional keyword arguments passed to :func:`scanpy.pl.embedding`.
     """
+    accessors = check_accessors(basis, color)
     if isinstance(data, AnnData):
         localvars = locals()
         for arg in ("use_raw", "layer", "gene_symbols"):
@@ -174,6 +202,13 @@ def embedding(
         )
 
     # `data` is MuData
+    if accessors:
+        # accessor references read from the MuData itself, so no values have to be fetched from the modalities
+        reject_with_accessors(use_raw=use_raw, layer=layer, gene_symbols=gene_symbols)
+        if isinstance(basis, str) and basis not in data.obsm and "X_" + basis in data.obsm:
+            basis = "X_" + basis  # a name is looked up in the joint embeddings of the MuData object
+        return v2_embedding(data, basis, color, **kwargs)  # type: ignore[arg-type]
+
     if basis not in data.obsm and "X_" + basis in data.obsm:
         basis = "X_" + basis
 

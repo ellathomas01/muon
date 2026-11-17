@@ -300,3 +300,99 @@ def test_pl_v2_tools_can_be_overridden(hv: ModuleType, scanpy_v2: None, mdata: M
 
     plot = mu.pl.embedding(mdata, basis="mod1:umap", color="condition", tools=["pan"])
     assert not any(isinstance(t, HoverTool) for t in hv.render(plot, backend="bokeh").tools)
+
+
+# --- accessor references instead of names ------------------------------------------------------------
+
+
+def test_pl_scatter_v2_accessors_anndata(hv: ModuleType, scanpy_v2: None, adata: AnnData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    plot = mu.pl.scatter(
+        adata, x=A.X[:, "mod1_g0"], y=A.layers["counts"][:, "mod1_g1"], color=A.obs["condition"]
+    )
+    assert isinstance(plot, hv.Scatter)
+    np.testing.assert_allclose(plot.dimension_values(0), _column(adata, 0))
+    np.testing.assert_allclose(plot.dimension_values(1), _column(adata, 1, "counts"))
+    assert list(plot.dimension_values(2)) == list(adata.obs["condition"])
+
+
+def test_pl_scatter_v2_accessors_mixed_with_names_anndata(hv: ModuleType, scanpy_v2: None, adata: AnnData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    plot = mu.pl.scatter(adata, x="mod1_g0", y="mod1_g1", color=A.obs["condition"])
+    assert isinstance(plot, hv.Scatter)
+    np.testing.assert_allclose(plot.dimension_values(0), _column(adata, 0))
+    assert list(plot.dimension_values(2)) == list(adata.obs["condition"])
+
+
+def test_pl_embedding_v2_accessors_anndata(hv: ModuleType, scanpy_v2: None, adata: AnnData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    plot = mu.pl.embedding(adata, basis=A.obsm["umap"][:, [0, 1]], color=A.layers["counts"][:, "mod1_g0"])
+    assert isinstance(plot, hv.Scatter)
+    np.testing.assert_allclose(plot.dimension_values(0), adata.obsm["umap"][:, 0])
+    np.testing.assert_allclose(plot.dimension_values(2), _column(adata, 0, "counts"))
+
+
+def test_pl_scatter_v2_accessors_mudata(hv: ModuleType, scanpy_v2: None, mdata: MuData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    plot = mu.pl.scatter(mdata, x=A.obsm["X_joint"][0], y=A.obsm["X_joint"][1], color=A.obs["condition"])
+    assert isinstance(plot, hv.Scatter)
+    np.testing.assert_allclose(plot.dimension_values(0), mdata.obsm["X_joint"][:, 0])
+    np.testing.assert_allclose(plot.dimension_values(1), mdata.obsm["X_joint"][:, 1])
+    assert list(plot.dimension_values(2)) == list(mdata.obs["condition"])
+
+
+def test_pl_embedding_v2_accessors_mudata(hv: ModuleType, scanpy_v2: None, mdata: MuData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    plot = mu.pl.embedding(mdata, basis=A.obsm["X_joint"][:, [0, 1]], color=A.obs["score"])
+    assert isinstance(plot, hv.Scatter)
+    np.testing.assert_allclose(plot.dimension_values(0), mdata.obsm["X_joint"][:, 0])
+    np.testing.assert_allclose(plot.dimension_values(2), mdata.obs["score"])
+
+
+def test_pl_umap_v2_accessors_mudata(hv: ModuleType, scanpy_v2: None, mdata: MuData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    plot = mu.pl.umap(mdata, color=A.obs["score"])  # the basis is a name, looked up in the joint embeddings
+    assert isinstance(plot, hv.Scatter)
+    np.testing.assert_allclose(plot.dimension_values(0), mdata.obsm["umap"][:, 0])
+
+
+def test_pl_v2_accessors_reject_name_arguments(hv: ModuleType, scanpy_v2: None, adata: AnnData, mdata: MuData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    with pytest.raises(ValueError, match="accessor references"):
+        mu.pl.scatter(adata, x=A.X[:, "mod1_g0"], y="mod1_g1", layers="counts")
+    with pytest.raises(ValueError, match="accessor references"):
+        mu.pl.embedding(adata, basis="umap", color=A.obs["condition"], gene_symbols="symbol")
+    with pytest.raises(ValueError, match="accessor references"):
+        mu.pl.embedding(mdata, basis=A.obsm["X_joint"][:, [0, 1]], color=A.obs["score"], layer="counts")
+
+
+def test_pl_scatter_v2_accessors_mudata_cannot_mix_with_names(hv: ModuleType, scanpy_v2: None, mdata: MuData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    with pytest.raises(ValueError, match="`y`"):
+        mu.pl.scatter(mdata, x=A.obsm["X_joint"][0], y="mod1_g0")
+
+
+def test_pl_accessors_need_the_v2_preset(hv: ModuleType, adata: AnnData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    with pytest.raises(ValueError, match="ScanpyV2Preview"):
+        mu.pl.scatter(adata, x=A.X[:, "mod1_g0"], y=A.X[:, "mod1_g1"])
+    with pytest.raises(ValueError, match="ScanpyV2Preview"):
+        mu.pl.embedding(adata, basis="umap", color=A.obs["condition"])
