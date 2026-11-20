@@ -16,8 +16,8 @@ from mudata import MuData
 from ._hv import (
     _scanpy_preset_is_v2,
     check_accessors,
+    reject_unused_options,
     reject_v2_options,
-    reject_with_accessors,
     require_only_accessors,
     v2_embedding,
     v2_scatter,
@@ -53,8 +53,9 @@ def scatter(
 
     With scanpy's ``ScanpyV2Preview`` preset, ``x``, ``y`` and ``color`` can also be accessor references
     (e.g. ``A.X[:, "gene"]``, ``A.layers["counts"][:, "gene"]`` or ``A.obs["column"]``, with ``A`` from
-    ``scanpy.pl.hv_init``). They say where the data comes from, so ``layers`` and ``gene_symbols`` cannot be set
-    with them. For a MuData object, all of ``x``, ``y`` and ``color`` (if given) must then be references.
+    ``scanpy.pl.hv_init``). They say where the data comes from, so ``layers`` and ``gene_symbols`` only apply to the
+    arguments given as names, and setting them is an error if all arguments are references. For a MuData object, all
+    of ``x``, ``y`` and ``color`` (if given) must be references.
 
     See :func:`scanpy.pl.scatter` for details.
 
@@ -95,8 +96,8 @@ def scatter(
     if accessors:
         # accessor references read from the MuData itself, so no values have to be fetched from the modalities
         require_only_accessors(x=x, y=y, color=color)
-        reject_with_accessors(use_raw=use_raw, layers=layers, gene_symbols=gene_symbols)
-        return v2_scatter(data, x, y, color, **kwargs)  # type: ignore[arg-type]
+        reject_unused_options((x, y, color), use_raw=use_raw, layers=layers, gene_symbols=gene_symbols)
+        return v2_scatter(data, x, y, color, **kwargs)
 
     if isinstance(layers, str | Mapping) or layers is None:
         clayers = (layers, layers, layers)
@@ -159,9 +160,9 @@ def embedding(
 
     With scanpy's ``ScanpyV2Preview`` preset, ``basis`` and ``color`` can also be accessor references
     (e.g. ``A.obsm["X_umap"][:, [0, 1]]`` and ``A.obs["column"]``, with ``A`` from ``scanpy.pl.hv_init``). They say
-    where the data comes from, so ``layer`` and ``gene_symbols`` cannot be set with them. For a MuData object with
-    references, a ``basis`` given as a name is looked up in the joint embeddings only (``.obsm``), not in the
-    modalities.
+    where the data comes from, so ``layer`` and ``gene_symbols`` only apply to the names in ``color``, and setting them
+    is an error if ``color`` has only references. For a MuData object with references, ``color`` must be references
+    too, and a ``basis`` given as a name is looked up in the joint embeddings only (``.obsm``), not in the modalities.
 
     See :func:`scanpy.pl.embedding` for details.
 
@@ -204,10 +205,19 @@ def embedding(
     # `data` is MuData
     if accessors:
         # accessor references read from the MuData itself, so no values have to be fetched from the modalities
-        reject_with_accessors(use_raw=use_raw, layer=layer, gene_symbols=gene_symbols)
-        if isinstance(basis, str) and basis not in data.obsm and "X_" + basis in data.obsm:
-            basis = "X_" + basis  # a name is looked up in the joint embeddings of the MuData object
-        return v2_embedding(data, basis, color, **kwargs)  # type: ignore[arg-type]
+        require_only_accessors(color=color)
+        reject_unused_options((color,), use_raw=use_raw, layer=layer, gene_symbols=gene_symbols)
+        if isinstance(basis, str):  # a name is looked up in the joint embeddings of the MuData object
+            if basis not in data.obsm and "X_" + basis in data.obsm:
+                basis = "X_" + basis
+            if basis not in data.obsm:
+                msg = (
+                    "With accessor references, `basis` must be an embedding in .obsm of the MuData object or an "
+                    f"accessor reference such as A.obsm['X_umap'][:, [0, 1]], not {basis!r}. "
+                    "Embeddings of the modalities are not supported yet."
+                )
+                raise KeyError(msg)
+        return v2_embedding(data, basis, color, **kwargs)
 
     if basis not in data.obsm and "X_" + basis in data.obsm:
         basis = "X_" + basis

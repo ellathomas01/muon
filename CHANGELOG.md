@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning][].
   input, `x`, `y` and `color` can be `.obs` columns or variable names (read from `.X` or from `layer(s)`, and looked up
   in `gene_symbols`); a name that is both raises an error, and `use_raw` is not supported. A `MuData` can also be passed
   to scanpy's HoloViews plotting functions; this needs `hv-anndata>=0.1.3` and `mudata>=0.3.10`.
+- With the `ScanpyV2Preview` preset, `pl.scatter` and `pl.embedding` also accept accessor references instead of names,
+  e.g. `A.X[:, "gene"]`, `A.layers["counts"][:, "gene"]` or `A.obs["column"]` for `x`, `y` and `color`, and
+  `A.obsm["X_umap"][:, [0, 1]]` for `basis` (`A` from `scanpy.pl.hv_init`). References can be mixed with names, which
+  are still looked up using `layer(s)` and `gene_symbols`; these options are an error if all arguments are references.
+  For a `MuData`, all of `x`, `y` and `color` must then be references, and a `basis` given as a name refers to its
+  joint embeddings.
 
 ### Fixed
 

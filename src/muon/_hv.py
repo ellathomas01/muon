@@ -8,7 +8,8 @@ here is imported unless the preset is active.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Collection, Iterator
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     import holoviews as hv
     from anndata import AnnData
     from anndata.acc import AdAcc, AdRef
+    from mudata import MuData
 
 
 def _scanpy_preset_is_v2() -> bool:
@@ -27,21 +29,31 @@ def _scanpy_preset_is_v2() -> bool:
     return v2 is not None and getattr(sc.settings, "preset", None) is v2
 
 
-def _is_names(obj: object) -> bool:
-    """Whether ``obj`` is a name or a sequence of names, as opposed to ``anndata.acc`` references."""
+def _names_only(obj: object) -> bool:
+    """Whether ``obj`` is a name or a collection of names, and not an ``anndata.acc`` reference or a list of them.
+
+    A collection is a list, tuple, set, array, index and so on. Iterators count as names, as they cannot be inspected
+    without being consumed.
+    """
     if isinstance(obj, str):
         return True
-    return isinstance(obj, list | tuple) and all(isinstance(k, str) for k in obj)
+    if isinstance(obj, Collection):
+        return all(isinstance(k, str) for k in obj)
+    return isinstance(obj, Iterator)
 
 
-def uses_accessors(*args: object) -> bool:
-    """Whether any of ``args`` is given as accessor references (``A.obs["x"]``, ``A.X[:, "gene"]``) and not as names."""
-    return any(a is not None and not _is_names(a) for a in args)
+def _has_names(obj: object) -> bool:
+    """Whether ``obj`` is a name or a collection with a name in it, i.e. is not made of references only."""
+    if isinstance(obj, str):
+        return True
+    if isinstance(obj, Collection):
+        return any(isinstance(k, str) for k in obj)
+    return isinstance(obj, Iterator)
 
 
 def check_accessors(*args: object) -> bool:
-    """Like :func:`uses_accessors`, but raise if accessor references are used without the ``ScanpyV2Preview`` preset."""
-    used = uses_accessors(*args)
+    """Whether any of ``args`` uses accessor references; raise if they are used without ``ScanpyV2Preview``."""
+    used = any(a is not None and not _names_only(a) for a in args)
     if used and not _scanpy_preset_is_v2():
         msg = "Accessor references are only supported with scanpy's ScanpyV2Preview preset."
         raise ValueError(msg)
@@ -49,8 +61,8 @@ def check_accessors(*args: object) -> bool:
 
 
 def require_only_accessors(**args: object) -> None:
-    """Raise if some of ``args`` are names while others are accessor references (for ``MuData`` input)."""
-    names = [k for k, v in args.items() if v is not None and _is_names(v)]
+    """Raise if any of ``args`` is or contains a name (for ``MuData`` input, where names are not resolved)."""
+    names = [k for k, v in args.items() if v is not None and _has_names(v)]
     if names:
         msg = (
             f"With accessor references, {', '.join(f'`{k}`' for k in names)} must be given as accessor references "
@@ -59,13 +71,18 @@ def require_only_accessors(**args: object) -> None:
         raise ValueError(msg)
 
 
-def reject_with_accessors(**options: object) -> None:
-    """Raise if an option that resolves names was set together with accessor references."""
+def reject_unused_options(args: Sequence[object], **options: object) -> None:
+    """Raise if options that resolve names are set but every argument in ``args`` is an accessor reference.
+
+    ``layers`` and ``gene_symbols`` apply to the arguments given as names and are ignored for references. If there are
+    only references, there is nothing for them to apply to, which is most likely a mistake.
+    """
+    given = [a for a in args if a is not None]
     set_options = [k for k, v in options.items() if v not in (None, False)]
-    if set_options:
+    if set_options and given and not any(_has_names(a) for a in given):
         msg = (
-            f"{set_options} resolve names and cannot be combined with accessor references, "
-            "which already say where the data comes from."
+            f"Options that only apply to names are set ({', '.join(f'`{k}`' for k in set_options)}), but every "
+            "argument is an accessor reference, which already says where its data comes from."
         )
         raise ValueError(msg)
 
@@ -80,14 +97,13 @@ def _layer_triple(layers: str | tuple[str, str, str] | None) -> tuple[str | None
     return layers
 
 
-def _v2_ref(ad: AnnData, A: AdAcc, key: str | AdRef, layer: str | None, gene_symbols: str | None) -> AdRef:
+def _v2_ref(ad: AnnData | MuData, A: AdAcc, key: str | AdRef, layer: str | None, gene_symbols: str | None) -> AdRef:
     """Turn a name into an ``hv-anndata`` reference: an ``.obs`` column, or a variable read from ``.X`` or a layer.
 
     As in ``scanpy``, ``gene_symbols`` is the ``.var`` column that variable names are looked up in. A name that is
     both an ``.obs`` column and a variable is ambiguous and raises an error. A reference is returned as it is.
     """
     if not isinstance(key, str):  # already an accessor reference
-        reject_with_accessors(layer=layer, gene_symbols=gene_symbols)
         return key
 
     if gene_symbols is None:
@@ -120,7 +136,7 @@ def _v2_ref(ad: AnnData, A: AdAcc, key: str | AdRef, layer: str | None, gene_sym
 
 
 def _v2_refs(
-    ad: AnnData,
+    ad: AnnData | MuData,
     A: AdAcc,
     keys: str | Sequence[str] | AdRef | Sequence[AdRef] | None,
     layer: str | None = None,
@@ -128,15 +144,17 @@ def _v2_refs(
 ) -> AdRef | list[AdRef] | None:
     """Turn names into ``hv-anndata`` references (``None`` stays ``None``; one name gives one reference).
 
-    References, or a list of them, are returned as they are.
+    References are returned as they are, and a list can mix names and references.
     """
     if keys is None:
         return None
-    if not _is_names(keys):  # accessor references
-        reject_with_accessors(layer=layer, gene_symbols=gene_symbols)
-        return keys  # type: ignore[return-value]
-    names = [keys] if isinstance(keys, str) else list(keys)
-    refs = [_v2_ref(ad, A, k, layer, gene_symbols) for k in names]
+    if isinstance(keys, str):
+        items: list[str | AdRef] = [keys]
+    elif _names_only(keys) or isinstance(keys, list | tuple):
+        items = list(cast("Sequence[str | AdRef]", keys))
+    else:  # a single accessor reference
+        return cast("AdRef", keys)
+    refs = [_v2_ref(ad, A, k, layer, gene_symbols) for k in items]
     return refs[0] if len(refs) == 1 else refs
 
 
@@ -156,7 +174,7 @@ def _v2_options(plot: hv.Scatter | hv.Layout, options: dict[str, object]) -> hv.
 
 
 def v2_scatter(
-    ad: AnnData,
+    ad: AnnData | MuData,
     x: str | AdRef | None,
     y: str | AdRef | None,
     color: str | Sequence[str] | AdRef | Sequence[AdRef] | None = None,
@@ -168,14 +186,16 @@ def v2_scatter(
 
     ``x``, ``y`` and ``color`` are ``.obs`` columns or variable names, or accessor references such as
     ``A.X[:, "gene"]``. ``layers`` are the layers variables are read from for x, y and the colour (``.X`` by default)
-    and ``gene_symbols`` is the ``.var`` column variable names are looked up in; both only apply to names and cannot
-    be combined with references. Extra keyword arguments are HoloViews options, not matplotlib ones.
+    and ``gene_symbols`` is the ``.var`` column variable names are looked up in. Both apply to the names only, as a
+    reference says where its data comes from, and it is an error to set them if there are only references. Extra
+    keyword arguments are HoloViews options, not matplotlib ones.
     """
     import scanpy as sc
 
     if x is None or y is None:
         msg = "`x` and `y` are required with scanpy's ScanpyV2Preview preset."
         raise ValueError(msg)
+    reject_unused_options((x, y, color), layers=layers, gene_symbols=gene_symbols)
     layer_x, layer_y, layer_color = _layer_triple(layers)
     A = sc.pl.hv_init(None)  # registers the AnnData interface; does not load a plotting backend
     kdims = [_v2_ref(ad, A, x, layer_x, gene_symbols), _v2_ref(ad, A, y, layer_y, gene_symbols)]
@@ -184,7 +204,7 @@ def v2_scatter(
 
 
 def v2_embedding(
-    ad: AnnData,
+    ad: AnnData | MuData,
     basis: str | AdRef,
     color: str | Sequence[str] | AdRef | Sequence[AdRef] | None = None,
     layer: str | None = None,
@@ -196,11 +216,12 @@ def v2_embedding(
     The first two components of ``ad.obsm[basis]`` are plotted; ``basis`` can also be an accessor reference to the two
     coordinates, e.g. ``A.obsm["X_umap"][:, [0, 1]]``. ``color`` are ``.obs`` columns or variable names, or accessor
     references; variables are read from ``layer`` (``.X`` by default) and looked up in the ``.var`` column
-    ``gene_symbols``, which cannot be combined with references. Extra keyword arguments are HoloViews options, not
-    matplotlib ones.
+    ``gene_symbols``. Both apply to the names only, and it is an error to set them if ``color`` has only references.
+    Extra keyword arguments are HoloViews options, not matplotlib ones.
     """
     import scanpy as sc
 
+    reject_unused_options((color,), layer=layer, gene_symbols=gene_symbols)
     A = sc.pl.hv_init(None)
     if isinstance(basis, str):
         if basis not in ad.obsm:

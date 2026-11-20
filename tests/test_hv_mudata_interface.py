@@ -368,16 +368,109 @@ def test_pl_umap_v2_accessors_mudata(hv: ModuleType, scanpy_v2: None, mdata: MuD
     np.testing.assert_allclose(plot.dimension_values(0), mdata.obsm["umap"][:, 0])
 
 
-def test_pl_v2_accessors_reject_name_arguments(hv: ModuleType, scanpy_v2: None, adata: AnnData, mdata: MuData) -> None:
+def test_pl_v2_accessors_only_reject_name_options_without_names(
+    hv: ModuleType, scanpy_v2: None, adata: AnnData, mdata: MuData
+) -> None:
     import muon as mu
     from hv_anndata import A
 
-    with pytest.raises(ValueError, match="accessor references"):
-        mu.pl.scatter(adata, x=A.X[:, "mod1_g0"], y="mod1_g1", layers="counts")
-    with pytest.raises(ValueError, match="accessor references"):
+    with pytest.raises(ValueError, match="only apply to names"):
+        mu.pl.scatter(adata, x=A.X[:, "mod1_g0"], y=A.X[:, "mod1_g1"], layers="counts")
+    with pytest.raises(ValueError, match="only apply to names"):
         mu.pl.embedding(adata, basis="umap", color=A.obs["condition"], gene_symbols="symbol")
-    with pytest.raises(ValueError, match="accessor references"):
+    with pytest.raises(ValueError, match="only apply to names"):
         mu.pl.embedding(mdata, basis=A.obsm["X_joint"][:, [0, 1]], color=A.obs["score"], layer="counts")
+
+
+def test_pl_scatter_v2_layers_apply_to_names_only(hv: ModuleType, scanpy_v2: None, adata: AnnData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    plot = mu.pl.scatter(adata, x="mod1_g0", y="mod1_g1", color=A.obs["condition"], layers="counts")
+    np.testing.assert_allclose(plot.dimension_values(0), _column(adata, 0, "counts"))
+    np.testing.assert_allclose(plot.dimension_values(1), _column(adata, 1, "counts"))
+    assert list(plot.dimension_values(2)) == list(adata.obs["condition"])
+
+    plot = mu.pl.scatter(adata, x=A.X[:, "mod1_g0"], y="mod1_g1", layers="counts")  # the reference keeps its own source
+    np.testing.assert_allclose(plot.dimension_values(0), _column(adata, 0))
+    np.testing.assert_allclose(plot.dimension_values(1), _column(adata, 1, "counts"))
+
+
+def test_pl_v2_gene_symbols_apply_to_names_only(hv: ModuleType, scanpy_v2: None, adata: AnnData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    plot = mu.pl.scatter(adata, x="SYM0", y=A.X[:, "mod1_g1"], gene_symbols="symbol")
+    np.testing.assert_allclose(plot.dimension_values(0), _column(adata, 0))
+    np.testing.assert_allclose(plot.dimension_values(1), _column(adata, 1))
+
+    layout = mu.pl.embedding(adata, basis="umap", color=["SYM0", A.obs["condition"]], gene_symbols="symbol")
+    assert isinstance(layout, hv.Layout)
+    assert len(layout) == 2
+
+
+def test_pl_embedding_v2_several_accessor_colours(hv: ModuleType, scanpy_v2: None, adata: AnnData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    layout = mu.pl.embedding(adata, basis="umap", color=[A.obs["condition"], A.X[:, "mod1_g0"]])
+    assert isinstance(layout, hv.Layout)
+    assert len(layout) == 2
+
+
+def test_pl_embedding_v2_accessors_mudata_needs_reference_colour(
+    hv: ModuleType, scanpy_v2: None, mdata: MuData
+) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    with pytest.raises(ValueError, match="`color`"):
+        mu.pl.embedding(mdata, basis=A.obsm["X_joint"][:, [0, 1]], color="mod1_g0")
+
+
+def test_pl_embedding_v2_accessors_mudata_modality_basis(hv: ModuleType, scanpy_v2: None, mdata: MuData) -> None:
+    import muon as mu
+    from hv_anndata import A
+
+    with pytest.raises(KeyError, match="not supported yet"):
+        mu.pl.embedding(mdata, basis="mod1:umap", color=A.obs["score"])
+
+
+# --- telling names from references -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "names",
+    ["gene", ["a", "b"], ("a", "b"), {"a", "b"}, np.array(["a", "b"]), pd.Index(["a", "b"]), {"a": 1}.keys()],
+    ids=["str", "list", "tuple", "set", "ndarray", "index", "dict_keys"],
+)
+def test_names_are_not_accessors_in_the_default_preset(names: object) -> None:
+    """Collections of names other than lists and tuples must keep working without the v2 preset."""
+    assert _hv.check_accessors(names) is False
+
+
+def test_an_iterator_of_names_is_not_consumed() -> None:
+    names = iter(["a", "b"])
+    assert _hv.check_accessors(names) is False
+    assert list(names) == ["a", "b"]
+
+
+def test_real_references_are_not_names(hv: ModuleType) -> None:
+    from hv_anndata import A
+
+    only_references = [
+        A.obs["score"],
+        A.X[:, "mod1_g0"],
+        A.layers["counts"][:, "mod1_g0"],
+        A.obsm["umap"][:, [0, 1]],
+        [A.obs["score"], A.obs["condition"]],
+    ]
+    for ref in only_references:
+        assert not _hv._names_only(ref)
+        assert not _hv._has_names(ref)
+    mixed = ["mod1_g0", A.obs["score"]]
+    assert not _hv._names_only(mixed)
+    assert _hv._has_names(mixed)
 
 
 def test_pl_scatter_v2_accessors_mudata_cannot_mix_with_names(hv: ModuleType, scanpy_v2: None, mdata: MuData) -> None:
